@@ -24,7 +24,7 @@
 Нужен macOS 14+ и Swift из Command Line Tools (Xcode не нужен). Для 3D-сборки — Node.js.
 
 ```bash
-git clone https://github.com/anonosya-ux/andreich.git
+git clone https://github.com/OAIWEB/andreich.git
 cd andreich
 ./scripts/build-app.sh
 open Андреич.app
