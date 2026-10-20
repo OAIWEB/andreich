@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Андреич 3D</title>
+<style>
+  body { margin: 0; background: #101114; color: #ddd; font: 14px -apple-system, system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
+  .bar { display: flex; gap: 6px; padding: 12px; flex-wrap: wrap; justify-content: center; }
+  button { background: #22252b; color: #eee; border: 0; padding: 7px 12px; border-radius: 99px; cursor: pointer; }
+  button.on { background: #0abab5; color: #000; }
+  .stage { display: flex; gap: 18px; align-items: flex-end; }
+  canvas { display: block; border-radius: 14px; }
+  #big { width: 560px; height: 560px; }
+  #small { width: 120px; height: 120px; background: #000; }
+  .light { background: #e9ecf1 !important; }
+</style>
+<script type="importmap">{ "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }</script>
+</head><body>
+<div class="bar" id="poses"></div>
+<div class="bar">
+  <button data-f="-1">← влево</button><button data-f="0" class="on">к зрителю</button><button data-f="1">вправо →</button>
+  <button id="bg">светлый фон</button>
+  <button id="shape">кругляш/полный</button>
+  <button id="theme">тема сайта</button>
+</div>
+<div class="stage"><canvas id="big"></canvas><canvas id="small"></canvas></div>
+<script type="module">
+  import { boot } from './andreich.js';
+  const q0 = new URLSearchParams(location.search);
+  const theme = q0.get('theme') || '';
+  const variant = q0.get('variant') || 'full';
+  const big = boot(document.getElementById('big'), { transparent: true, theme, variant });
+  const small = boot(document.getElementById('small'), { transparent: true, head: true, theme, variant });
+  window.A = big;
+  const poses = ['idle', 'walk', 'listen', 'wave', 'work', 'cheer', 'sit', 'sleep'];
+  const bar = document.getElementById('poses');
+  const q = new URLSearchParams(location.search);
+  for (const p of poses) {
+    const b = document.createElement('button'); b.textContent = p; b.onclick = () => set(p); bar.appendChild(b);
+  }
+  function set(p) { big.setState(p); small.setState(p); [...bar.children].forEach(b => b.classList.toggle('on', b.textContent === p)); }
+  document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { big.setFacing(+b.dataset.f); document.querySelectorAll('[data-f]').forEach(x => x.classList.toggle('on', x === b)); });
+  document.getElementById('bg').onclick = () => document.getElementById('big').classList.toggle('light');
+  let shape = variant;
+  document.getElementById('shape').onclick = () => { shape = shape === 'mini' ? 'full' : 'mini'; big.setVariant(shape); small.setVariant(shape); };
+  document.getElementById('theme').onclick = () => { q0.set('theme', theme ? '' : 'oaiweb'); q0.set('variant', shape); location.search = q0.toString(); };
+  set(q.get('pose') || 'idle');
+  if (q.get('facing')) big.setFacing(+q.get('facing'));
+  window.addEventListener('error', e => { document.body.insertAdjacentHTML('beforeend', `<pre style="color:#f66">${e.message}</pre>`); });
+</script>
+</body></html>

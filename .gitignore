@@ -1,0 +1,9 @@
+.build/
+.DS_Store
+Андреич.app/
+andreich3d/node_modules/
+andreich3d/dist/
+спрайты/
+образ/
+*.log
+.env
