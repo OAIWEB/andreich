@@ -30,6 +30,7 @@ struct NotchView: View {
             if vm.contentMounted {
                 OpenPanel()
                     .frame(width: open.width, height: open.height, alignment: .top)
+                    .clipped()
                     .opacity(vm.isOpen ? 1 : 0)
                     .allowsHitTesting(vm.isOpen)
             }
@@ -150,6 +151,7 @@ private struct AssistantView: View {
     @EnvironmentObject var brain: PetBrain
     @EnvironmentObject var monitor: ClaudeMonitor
     @EnvironmentObject var voice: VoiceListener
+    @EnvironmentObject var analyst: ProtocolAnalyst
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
@@ -181,7 +183,7 @@ private struct AssistantView: View {
                 if case .blocked(let m) = voice.state {
                     Text(m).font(.system(size: 11, design: .rounded)).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
                 }
-                ForEach(Array(voice.lines.suffix(3))) { l in
+                ForEach(Array(voice.lines.suffix(analyst.cards.isEmpty ? 3 : 2))) { l in
                     HStack(alignment: .top, spacing: 6) {
                         Text(Self.clock.string(from: l.time)).font(.system(size: 10, design: .monospaced)).foregroundColor(.white.opacity(0.4))
                         Text(l.text).font(.system(size: 11, design: .rounded)).foregroundColor(.white.opacity(0.9)).lineLimit(2)
@@ -411,7 +413,12 @@ private struct SuggestionList: View {
                     if analyst.analyzing { ProgressView().controlSize(.mini) }
                 }
             }
-            ForEach(analyst.cards) { card in SuggestionRow(card: card) }
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(analyst.cards) { card in SuggestionRow(card: card) }
+                }
+            }
+            .frame(maxHeight: 158)
         }
     }
 }

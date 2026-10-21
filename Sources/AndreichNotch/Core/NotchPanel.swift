@@ -29,7 +29,7 @@ final class NotchViewModel: ObservableObject {
 
     static let wing: CGFloat = 46
     static let flare: CGFloat = 8
-    static let openSize = CGSize(width: 680, height: 290)
+    static let openSize = CGSize(width: 680, height: 326)
 
     /// Отладка: ANDREICH_PIN=1 не даёт панели закрываться.
     private static let pinned = ProcessInfo.processInfo.environment["ANDREICH_PIN"] != nil
