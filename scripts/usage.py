@@ -42,7 +42,7 @@ def fetch():
     req = urllib.request.Request(URL, headers={
         "Authorization": "Bearer " + token(),
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-cli/2.1.302 (external, cli)",
+        "User-Agent": "AndreichNotch (+https://github.com/OAIWEB/andreich)",
     })
     with urllib.request.urlopen(req, timeout=15) as r:
         d = json.loads(r.read().decode())
