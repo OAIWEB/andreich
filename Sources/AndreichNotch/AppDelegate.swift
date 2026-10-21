@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shelf: ShelfStore!
     private var limits: UsageMonitor!
     private var analyst: ProtocolAnalyst!
+    private var dropCatcher: DropCatcher!
     private var notch: NotchController!
     private var petWindow: PetWindowController!
     private var statusItem: NSStatusItem!
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if on { self.brain.sendHome() }      // чтобы слушать, Андреич возвращается домой
         }.store(in: &cancellables)
         notch = NotchController(geometry: geometry, brain: brain, monitor: monitor, voice: voice, shelf: shelf, limits: limits, analyst: analyst)
+        dropCatcher = DropCatcher(vm: notch.vm, shelf: shelf)
         petWindow = PetWindowController(brain: brain, shelf: shelf)
         setupStatusItem()
         monitor.poll()
@@ -65,6 +67,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         registerHotKey()
+        // Приём перетаскиваний не может ждать опроса мыши: во время системного drag
+        // наш таймер молчит. Глобальный монитор событий «вооружает» окна мгновенно.
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged]) { [weak self] _ in
+            guard let self else { return }
+            let vm = self.notch.vm
+            let zone = (vm.isOpen ? vm.openRect : vm.closedRect).insetBy(dx: -24, dy: -16)
+            self.dropCatcher.arm(over: zone)
+            if self.brain.mode != .home { self.petWindow.panel.ignoresMouseEvents = false }
+        }
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.dropCatcher.disarm() }
+        }
         setRate(60)
 
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,

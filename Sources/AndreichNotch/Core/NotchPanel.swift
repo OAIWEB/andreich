@@ -86,6 +86,7 @@ final class NotchViewModel: ObservableObject {
 
 @MainActor
 final class NotchController {
+    static var dbgLast = Date.distantPast
     let panel: NotchPanel
     let vm: NotchViewModel
 
@@ -103,19 +104,17 @@ final class NotchController {
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
         let host = FirstMouseHostingView(
             rootView: NotchView().environmentObject(vm).environmentObject(brain).environmentObject(monitor).environmentObject(voice).environmentObject(shelf).environmentObject(limits).environmentObject(analyst))
-        let dropView = DropView(frame: .zero)
-        host.autoresizingMask = [.width, .height]
-        dropView.addSubview(host)
-        panel.contentView = dropView
+        panel.contentView = host
+        host.armForFileDrops()
         let vmRef = vm
-        dropView.onEnter = { [weak self] in
+        host.onDragEnter = { [weak self] in
             vmRef.isDragOver = true
             vmRef.tab = .shelf
             vmRef.open()
             self?.panel.ignoresMouseEvents = false
         }
-        dropView.onExit = { vmRef.isDragOver = false }
-        dropView.onDropURLs = { urls in
+        host.onDragExit = { vmRef.isDragOver = false }
+        host.onDropURLs = { urls in
             vmRef.isDragOver = false
             guard !urls.isEmpty else { return false }
             shelf.add(urls)
@@ -156,10 +155,7 @@ final class NotchController {
             && abs(m.x - vm.geometry.screenFrame.midX) < vm.closedBody.width
         let wants = hot.contains(m) || nearTop || vm.isDragOver
         if panel.ignoresMouseEvents == wants { panel.ignoresMouseEvents = !wants }
-        // пока тащат, поднимаемся над шторками вроде Dropover, которые всплывают у края экрана
-        let lvl = NSWindow.Level(rawValue: (dragging ? NSWindow.Level.screenSaver.rawValue + 1
-                                                     : NSWindow.Level.mainMenu.rawValue + 3))
-        if panel.level != lvl { panel.level = lvl }
+        // Уровень НЕ поднимаем: окна выше системного drag-слоя не могут быть целью перетаскивания.
     }
 
     func refreshGeometry(_ g: NotchGeometry) {
@@ -168,6 +164,52 @@ final class NotchController {
     }
 }
 
+
+/// Невидимое окно-ловушка для перетаскивания: появляется над чёлкой только пока
+/// в системе тащат что-то с зажатой кнопкой, и исчезает сразу после. Обычное окно
+/// без хитрых флагов — системе не к чему придраться.
+@MainActor
+final class DropCatcher {
+    let window: NSWindow
+    private let drop = DropView(frame: .zero)
+
+    init(vm: NotchViewModel, shelf: ShelfStore) {
+        window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.isReleasedWhenClosed = false
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 4)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        drop.name = "чёлка"
+        window.contentView = drop
+        drop.onEnter = {
+            vm.isDragOver = true
+            vm.tab = .shelf
+            vm.open()
+        }
+        drop.onExit = { vm.isDragOver = false }
+        drop.onDropURLs = { [weak self] urls in
+            vm.isDragOver = false
+            self?.disarm()
+            guard !urls.isEmpty else { return false }
+            shelf.add(urls)
+            vm.tab = .shelf
+            vm.open()
+            return true
+        }
+    }
+
+    /// Показать ловушку над зоной чёлки (или раскрытой панели).
+    func arm(over rect: CGRect) {
+        if window.frame != rect { window.setFrame(rect, display: false) }
+        if !window.isVisible { window.orderFrontRegardless() }
+    }
+
+    func disarm() {
+        if window.isVisible { window.orderOut(nil) }
+    }
+}
 
 /// Приём файлов, брошенных на чёлку. SwiftUI-овый onDrop в окне поверх меню-бара не срабатывает,
 /// поэтому целью перетаскивания служит обычный NSView.

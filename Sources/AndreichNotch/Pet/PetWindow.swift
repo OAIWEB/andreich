@@ -8,8 +8,48 @@ final class PetPanel: NSPanel {
 }
 
 /// Чтобы первый клик по нажимаемому окну доходил до SwiftUI без активации приложения.
+/// Плюс перетаскивание файлов: NSHostingView сам стоит первым в hit-test'е и молча
+/// отказывает чужим drag'ам, поэтому принимаем их прямо здесь и отдаём колбэкам.
 final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    var onDragEnter: () -> Void = {}
+    var onDragExit: () -> Void = {}
+    var onDropURLs: ([URL]) -> Bool = { _ in false }
+    private var dropArmed = false
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func armForFileDrops() {
+        dropArmed = true
+        registerForDraggedTypes([.fileURL,
+                                 NSPasteboard.PasteboardType("NSFilenamesPboardType"),
+                                 NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard dropArmed else { return super.draggingEntered(sender) }
+        dropLog("вошёл чёлка (host)")
+        onDragEnter()
+        return .copy
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { dropArmed ? .copy : super.draggingUpdated(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        if dropArmed { onDragExit() } else { super.draggingExited(sender) }
+    }
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        if dropArmed { onDragExit() } else { super.draggingEnded(sender) }
+    }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { dropArmed ? true : super.prepareForDragOperation(sender) }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard dropArmed else { return super.performDragOperation(sender) }
+        var urls = (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                    options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if urls.isEmpty,
+           let names = sender.draggingPasteboard.propertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")) as? [String] {
+            urls = names.map { URL(fileURLWithPath: $0) }
+        }
+        dropLog("бросили чёлка (host): \(urls.count) шт. \(urls.map(\.lastPathComponent).joined(separator: ", "))")
+        return onDropURLs(urls)
+    }
 }
 
 struct SpeechBubble: View {
