@@ -98,7 +98,7 @@ final class PetBrain: ObservableObject {
         case .home:
             setPose(homePose); setScale(1); setRotation(0)
             position = homeCenter
-            if !claudeWorking, !listening, now >= nextWander { goForWalk() }
+            // Сам по экрану не шатается: выход — только «работа закончена» или кнопка в меню.
 
         case .dropping:
             dropT += dt
@@ -159,9 +159,9 @@ final class PetBrain: ObservableObject {
 
     private func land(_ now: Date) {
         mode = .roaming
-        if cheerOnLanding {
+        if cheerOnLanding {   // короткая вылазка: порадовался — и сразу домой
             act = .cheer; actEnds = now.addingTimeInterval(3.5)
-            roamEnds = now.addingTimeInterval(11)
+            roamEnds = now.addingTimeInterval(7)
             say("Готово!", 3)
             cheerOnLanding = false
         } else {
