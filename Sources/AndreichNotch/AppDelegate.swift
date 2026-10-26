@@ -81,9 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         setRate(60)
 
+        // Смена параметров экрана (сон дисплея, внешний монитор, разрешение). Раньше тут стоял
+        // MainActor.assumeIsolated — на пробуждении он падал в рантайме Swift (SIGSEGV, 25.10 21:21),
+        // и приложение молча умирало. Обычный асинхронный прыжок на главный актор этого не делает.
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
+                                               object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor [weak self] in
                 guard let self, let g = NotchGeometry.current() else { return }
                 self.brain.geometry = g
                 self.notch.refreshGeometry(g)
