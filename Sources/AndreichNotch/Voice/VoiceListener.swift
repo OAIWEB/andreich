@@ -65,6 +65,14 @@ final class VoiceListener: ObservableObject {
     @Published private(set) var state: State = .off
     @Published private(set) var partial = ""
     @Published private(set) var lines: [VoiceLine] = []
+    /// Сколько фраз записано за всё время (растёт всегда, в отличие от lines, который обрезается).
+    /// По нему анализатор знает, что он ещё не разобрал.
+    @Published private(set) var totalCommitted = 0
+    /// Когда распознавание в последний раз выдало хоть какой-то текст.
+    @Published private(set) var lastTextAt: Date?
+    /// С какого момента «звук идёт, а текста нет» (nil — всё нормально).
+    @Published private(set) var stallSince: Date?
+    private var loudScore = 0.0
     /// Куда пишется звук текущей сессии (для подписи в панели).
     @Published private(set) var audioName = ""
 
@@ -110,6 +118,7 @@ final class VoiceListener: ObservableObject {
             state = .listening
             UserDefaults.standard.set(true, forKey: Self.wasOnKey)
             errorTimes = []; deadRestarts = 0
+            loudScore = 0; stallSince = nil; lastTextAt = nil
             beginRequest()
             VoiceLog.write("микрофон включён, звук пишется в \(audioName)")
             ProtocolWriter.note(restored ? "микрофон включён снова после перезапуска, звук: \(audioName)"
@@ -132,6 +141,7 @@ final class VoiceListener: ObservableObject {
         task?.cancel(); task = nil
         stopEngine()
         partial = ""
+        stallSince = nil
         state = .off
         if byUser { UserDefaults.standard.set(false, forKey: Self.wasOnKey) }
         VoiceLog.write(byUser ? "микрофон выключен" : "приложение закрывается, запись прервана")
@@ -215,6 +225,7 @@ final class VoiceListener: ObservableObject {
     private func handle(text: String?, final: Bool, failed: Bool, message: String?, gen: Int) {
         guard gen == generation, isOn else { return }
         lastResult = Date()
+        if let text, !text.isEmpty { lastTextAt = Date() }
         if let text, text != partial { partial = text; lastChange = Date() }
         if final || failed {
             commitPartial()
@@ -237,6 +248,7 @@ final class VoiceListener: ObservableObject {
     private func watch() {
         guard state == .listening else { return }
         let now = Date()
+        updateStall(now)
         if !engine.isRunning { restartEngine(reason: "движок звука остановился"); return }
         if !partial.isEmpty, now.timeIntervalSince(lastChange) > 1.6 { commitPartial(); beginRequest(); return }
         if now.timeIntervalSince(requestStarted) > 50 { commitPartial(); beginRequest(); return }
@@ -248,13 +260,30 @@ final class VoiceListener: ObservableObject {
         }
     }
 
+    /// Звук держится заметную долю времени, а текста нет дольше 25 секунд — значит, речь не распознаётся.
+    /// Один тихий момент или шум комнаты тревоги не поднимают: нужна устойчивая «громкость».
+    private func updateStall(_ now: Date) {
+        let loud = now.timeIntervalSince(sink.lastLoudAt) < 1.0
+        loudScore = loudScore * 0.97 + (loud ? 0.03 : 0)        // постоянная времени ≈ 13 с
+        let since = lastTextAt ?? requestStarted
+        let stalled = loudScore > 0.35 && now.timeIntervalSince(since) > 25 && partial.isEmpty
+        if stalled {
+            if stallSince == nil { stallSince = now; VoiceLog.write("ТРЕВОГА: звук идёт, а текста нет — \(Int(now.timeIntervalSince(since))) с") }
+        } else if stallSince != nil {
+            stallSince = nil
+            VoiceLog.write("распознавание снова выдаёт текст")
+        }
+    }
+
     private func commitPartial() {
         let t = partial.trimmingCharacters(in: .whitespacesAndNewlines)
         partial = ""
         guard !t.isEmpty else { return }
         let line = VoiceLine(time: Date(), text: t)
         lines.append(line)
-        if lines.count > 60 { lines.removeFirst(lines.count - 60) }
+        totalCommitted += 1
+        lastTextAt = Date()
+        if lines.count > 300 { lines.removeFirst(lines.count - 300) }
         ProtocolWriter.append(line)
     }
 }

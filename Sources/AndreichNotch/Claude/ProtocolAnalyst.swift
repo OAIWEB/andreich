@@ -46,7 +46,17 @@ final class ProtocolAnalyst: ObservableObject {
     private var pendingSeq = 0
     private var tgOffset = 0
     private var polling = false
-    private var analyzedCount = 0          // сколько строк протокола уже разобрано
+    private var analyzedTotal = 0          // сколько фраз (по монотонному счётчику голоса) уже разобрано
+    /// Очередь: сколько услышанных фраз ещё не разобрано.
+    @Published private(set) var pendingCount = 0
+    /// Когда разбор в последний раз успешно завершился.
+    @Published private(set) var lastAnalysisAt: Date?
+    /// Почему разбор не идёт (nil — всё нормально).
+    @Published private(set) var analysisError: String?
+    private var failStreak = 0
+    private var nextAttempt = Date.distantPast
+    private var stallAlertSent = false
+    private var failAlertSent = false
     private var lastRun = Date.distantPast
     private var seenTitles: [String] = []  // что уже предлагали — чтобы не повторяться
     private let store = EKEventStore()
@@ -69,18 +79,43 @@ final class ProtocolAnalyst: ObservableObject {
     }
 
     private func tick() {
+        watchAlerts()
+        pendingCount = max(0, voice.totalCommitted - analyzedTotal)
         guard !analyzing, voice.state == .listening else { return }
+        guard pendingCount > 0 else { return }
+        let now = Date()
+        guard now >= nextAttempt, now.timeIntervalSince(lastRun) > Self.minPause else { return }
         let lines = voice.lines
-        guard lines.count > analyzedCount else { return }
-        guard Date().timeIntervalSince(lastRun) > Self.minPause else { return }
-        guard let last = lines.last, Date().timeIntervalSince(last.time) > Self.settleAfter else { return }
-        analyze(Array(lines[analyzedCount...]))
+        guard let last = lines.last, now.timeIntervalSince(last.time) > Self.settleAfter else { return }
+        // Фразы, ушедшие из памяти (больше 300 в очереди), пропускаем — они остались в файле протокола.
+        let lost = max(0, pendingCount - lines.count)
+        if lost > 0 { analyzedTotal += lost; pendingCount -= lost }
+        let batch = min(pendingCount, 25)               // порциями: после долгого сбоя не шлём гигантский промт
+        guard batch > 0 else { return }
+        let start = lines.count - pendingCount          // самые старые необработанные
+        analyze(Array(lines[start..<(start + batch)]))
+    }
+
+    /// Тревоги в Телеграм: распознавание глохнет или разбор не отвечает. Один раз за эпизод.
+    private func watchAlerts() {
+        if let since = voice.stallSince {
+            if !stallAlertSent, Date().timeIntervalSince(since) > 120 {
+                stallAlertSent = true
+                Task { @MainActor in _ = await Self.telegramSend("⚠️ Андреич: звук идёт, а текст не записывается уже больше двух минут. Запись звука при этом сохранена в audio/ — ничего не потеряно, но карточек пока не будет.") }
+            }
+        } else { stallAlertSent = false }
+        if failStreak >= 3 {
+            if !failAlertSent {
+                failAlertSent = true
+                let why = analysisError ?? "нет ответа"
+                Task { @MainActor in _ = await Self.telegramSend("⚠️ Андреич: разбор протокола не работает (\(why)). Фразы копятся в очереди и разберутся сами, когда связь вернётся.") }
+            }
+        } else if failStreak == 0 { failAlertSent = false }
     }
 
     private func analyze(_ fresh: [VoiceLine]) {
         analyzing = true
         lastRun = Date()
-        analyzedCount += fresh.count
         let clock = DateFormatter(); clock.dateFormat = "HH:mm"
         let body = fresh.map { "- \(clock.string(from: $0.time)) \($0.text)" }.joined(separator: "\n")
         let skip = seenTitles.suffix(12).map { "«\($0)»" }.joined(separator: ", ")
@@ -113,16 +148,31 @@ final class ProtocolAnalyst: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.analyzing = false
-                guard let out else { return }
-                self.take(out)
+                guard let out else { return self.analysisFailed("Claude не ответил") }
+                guard self.take(out) else { return self.analysisFailed("ответ Claude не разобрать") }
+                self.analyzedTotal += fresh.count        // успех: порция прошла
+                self.failStreak = 0
+                self.analysisError = nil
+                self.lastAnalysisAt = Date()
+                self.pendingCount = max(0, self.voice.totalCommitted - self.analyzedTotal)
             }
         }
     }
 
-    private func take(_ out: String) {
+    /// Порция не разобрана: она остаётся в очереди, следующая попытка — с растущей паузой (до 10 минут).
+    private func analysisFailed(_ why: String) {
+        failStreak += 1
+        analysisError = "\(why) (\(failStreak))"
+        let pause = min(600.0, Self.minPause * pow(2.0, Double(failStreak)))
+        nextAttempt = Date().addingTimeInterval(pause)
+        VoiceLog.write("разбор не удался: \(why); попытка \(failStreak), следующая через \(Int(pause)) с")
+    }
+
+    @discardableResult
+    private func take(_ out: String) -> Bool {
         guard let open = out.firstIndex(of: "["), let close = out.lastIndex(of: "]"), open < close,
               let data = String(out[open...close]).data(using: .utf8),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return false }
         for item in raw.prefix(3) {
             guard let title = item["title"] as? String, !title.isEmpty else { continue }
             let lowered = title.lowercased()
@@ -146,6 +196,7 @@ final class ProtocolAnalyst: ObservableObject {
             cards.append(card)
         }
         if cards.count > 4 { cards.removeFirst(cards.count - 4) }
+        return true
     }
 
     // MARK: действия по карточке

@@ -58,13 +58,18 @@ private struct ClosedWings: View {
     @EnvironmentObject var voice: VoiceListener
 
     @EnvironmentObject var limits: UsageMonitor
+    @EnvironmentObject var analyst: ProtocolAnalyst
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 3) {
                 HStack(spacing: 5) {
                     if voice.state == .listening {
-                        Image(systemName: "mic.fill").font(.system(size: 9, weight: .bold)).foregroundColor(.red)
+                        Image(systemName: voice.stallSince != nil || analyst.analysisError != nil
+                              ? "exclamationmark.triangle.fill" : "mic.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(voice.stallSince != nil ? .red
+                                             : analyst.analysisError != nil ? Color(red: 0.98, green: 0.76, blue: 0.25) : .red)
                     }
                     StatusDot(working: monitor.isWorking)
                 }
@@ -180,6 +185,7 @@ private struct AssistantView: View {
                     Spacer(minLength: 0)
                     SummaryButton()
                 }
+                if voice.state == .listening { PipelineStatus() }
                 if case .blocked(let m) = voice.state {
                     Text(m).font(.system(size: 11, design: .rounded)).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
                 }
@@ -283,6 +289,56 @@ private struct LimitsBlock: View {
                 }
             }
             .frame(height: height)
+        }
+    }
+}
+
+/// Одна строка про здоровье конвейера: слышу ли звук, когда был последний текст,
+/// сколько фраз ждут разбора и когда он в последний раз прошёл. Нет проблем — серый спокойный тон,
+/// есть — жёлтый или красный с причиной.
+private struct PipelineStatus: View {
+    @EnvironmentObject var voice: VoiceListener
+    @EnvironmentObject var analyst: ProtocolAnalyst
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 3)) { ctx in
+            let now = ctx.date
+            let (text, level) = describe(now)
+            HStack(spacing: 5) {
+                Circle().fill(color(level)).frame(width: 6, height: 6)
+                Text(text).font(.system(size: 9.5, design: .rounded))
+                    .foregroundColor(level == 0 ? .white.opacity(0.45) : color(level))
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func ago(_ d: Date?, _ now: Date) -> String {
+        guard let d else { return "ещё нет" }
+        let s = max(0, Int(now.timeIntervalSince(d)))
+        if s < 60 { return "\(s) с назад" }
+        if s < 3600 { return "\(s / 60) мин назад" }
+        return "\(s / 3600) ч назад"
+    }
+
+    /// level: 0 — норма, 1 — внимание, 2 — авария
+    private func describe(_ now: Date) -> (String, Int) {
+        if let since = voice.stallSince {
+            return ("звук идёт, а текста нет уже \(Int(now.timeIntervalSince(since))) с — звук пишется в файл", 2)
+        }
+        if let err = analyst.analysisError {
+            return ("разбор не идёт: \(err) · в очереди \(analyst.pendingCount)", 1)
+        }
+        let text = "текст: \(ago(voice.lastTextAt, now)) · разобрано \(ago(analyst.lastAnalysisAt, now))"
+            + (analyst.pendingCount > 0 ? " · в очереди \(analyst.pendingCount)" : "")
+        return (text, 0)
+    }
+
+    private func color(_ level: Int) -> Color {
+        switch level {
+        case 2: return Color(red: 0.95, green: 0.27, blue: 0.27)
+        case 1: return Color(red: 0.98, green: 0.76, blue: 0.25)
+        default: return tiffany
         }
     }
 }
